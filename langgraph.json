@@ -1,0 +1,14 @@
+{
+  "graphs": {
+    "enricher": "app:graph"
+  },
+  "assistants": {
+    "enricher": { "graph": "app:graph" }
+  },
+  "dependencies": [
+    "langgraph",
+    "langchain",
+    "langchain-openai",
+    "langchain-tavily"
+  ]
+}

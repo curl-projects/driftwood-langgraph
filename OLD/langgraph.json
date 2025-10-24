@@ -1,0 +1,18 @@
+{
+  "graphs": {
+    "orchestrator": "app:graph",
+    "scout": "app:scout_graph",
+    "enricher": "app:enricher_graph"
+  },
+  "assistants": {
+    "orchestrator": { "graph": "app:graph" },
+    "scout": { "graph": "app:scout_graph" },
+    "enricher": { "graph": "app:enricher_graph" }
+  },
+  "dependencies": [
+    "langgraph",
+    "langchain",
+    "langchain-openai",
+    "langchain-tavily"
+  ]
+}

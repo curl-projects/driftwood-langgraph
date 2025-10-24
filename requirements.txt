@@ -1,0 +1,9 @@
+langgraph
+langgraph-api
+langgraph-runtime-inmem
+langchain
+langchain-core
+langchain-openai
+langchain-tavily
+python-dotenv
+requests
