@@ -154,6 +154,25 @@ def _infer_contracts_for_fields(schema_doc: Optional[Dict[str, Any]], fields: Li
     return planned, unique
 
 
+def _infer_subtype_from_fields(fields: Optional[List[str]]) -> Optional[str]:
+    try:
+        if not isinstance(fields, list) or not fields:
+            return None
+        low = [str(f or '').strip().lower() for f in fields]
+        if 'videofile' in low or 'poster' in low:
+            return 'videos'
+        if 'image' in low:
+            return 'images'
+        if 'ingredients' in low or 'steps' in low:
+            return 'recipes'
+        if 'replies' in low:
+            return 'tweets'
+        # Common markdown content across many types; do not guess subtype here
+        return None
+    except Exception:
+        return None
+
+
 def _pick_first(values: List[Optional[str]]) -> Optional[str]:
     for v in values:
         if isinstance(v, str) and v.strip():
@@ -636,8 +655,14 @@ async def fetch_everything(url: Optional[str] = None, urls: Optional[List[str]] 
     # Contract planning
     planned_contract: Optional[str] = None
     schema_doc: Optional[Dict[str, Any]] = None
+    # If contentType is missing or incorrect, infer from fields; else use provided
+    eff_subtype = None
     if isinstance(contentType, str) and contentType.strip():
-        schema_doc = await _load_form_schema(contentType.strip())
+        eff_subtype = contentType.strip()
+    if not eff_subtype:
+        eff_subtype = _infer_subtype_from_fields(fields)
+    if isinstance(eff_subtype, str) and eff_subtype.strip():
+        schema_doc = await _load_form_schema(eff_subtype.strip())
     # Bundle mode: plan per field and union contracts
     if isinstance(fields, list) and fields:
         planned_by_field, inferred_contracts = _infer_contracts_for_fields(schema_doc, [f for f in fields if isinstance(f, str) and f.strip()], url, contentType)
@@ -648,29 +673,35 @@ async def fetch_everything(url: Optional[str] = None, urls: Optional[List[str]] 
             if c and c not in union_contracts:
                 union_contracts.append(c)
         debug_steps.append({"event": "planned_contracts", "byField": planned_by_field, "contracts": union_contracts, "ts": time.time()})
-        # Execute bundle
-        # For now, map to legacy modes and fetch in priority order: thread > article > media > generic > transcript
+        # Execute bundle via contract registry (preserves output shape)
         results: Dict[str, Any] = {"ok": True, "citations": [url] if isinstance(url, str) else [], "provenance": {"urlsTried": [url] if isinstance(url, str) else []}, "debug": {"steps": []}}
-        # Always collect generic metadata
-        gen = await _fetch_general_mode(url=url, urls=urls)
-        results.update({k: gen.get(k) for k in ("title","description","metadata","thumbnail") if k in gen})
-        results.setdefault("citations", []).extend([c for c in gen.get("citations", []) if c not in (results.get("citations") or [])])
-        results.setdefault("provenance", {}).update(gen.get("provenance") or {})
-        results.setdefault("debug", {}).setdefault("steps", []).extend(gen.get("debug", {}).get("steps", []))
-        # Article
-        if "article" in union_contracts:
-            md = await _fetch_markdown_mode(url=url, urls=urls, field_id=(fieldId or (fields[0] if fields else None)))
-            if md.get("ok"):
-                results["article"] = {"markdown": md.get("proposedMarkdown") or "", "attachments": md.get("attachments") or []}
-                results.setdefault("citations", []).extend([c for c in (md.get("provenance") or {}).get("citations", []) if c not in (results.get("citations") or [])])
-                results.setdefault("debug", {}).setdefault("steps", []).extend(md.get("debug", {}).get("steps", []))
-        # Media
-        if "media" in union_contracts:
-            mm = await _fetch_media_mode(url=url, urls=urls, field_id=(fieldId or (fields[0] if fields else None)))
-            if mm.get("ok"):
-                results["media"] = mm.get("attachments") or []
-                results.setdefault("debug", {}).setdefault("steps", []).extend(mm.get("debug", {}).get("steps", []))
-        # TODO: thread / transcript in future
+        try:
+            from .contracts import resolve as _resolve_contracts  # type: ignore
+            from .contracts import __init__ as _bootstrap_contracts  # noqa: F401
+            contracts_impl = _resolve_contracts(union_contracts + ["generic"])  # always include generic
+            # fieldId for collection preference: first requested field if missing
+            fid = (fieldId or (fields[0] if fields else None))
+            for c in contracts_impl:
+                part = await c.collect(url=url, urls=urls, field_id=fid)
+                # Shallow merge per contract
+                for k, v in (part or {}).items():
+                    if k == "debug":
+                        results.setdefault("debug", {}).setdefault("steps", []).extend((v or {}).get("steps", []))
+                    elif k == "citations":
+                        results.setdefault("citations", []).extend([x for x in (v or []) if x not in results.get("citations", [])])
+                    elif k == "provenance":
+                        results.setdefault("provenance", {}).update(v or {})
+                    else:
+                        results[k] = v
+        except Exception:
+            # Fall back to legacy general-only behavior on any error
+            gen = await _fetch_general_mode(url=url, urls=urls)
+            for k in ("title","description","metadata","thumbnail"):
+                if k in gen:
+                    results[k] = gen.get(k)
+            results.setdefault("citations", []).extend([c for c in gen.get("citations", []) if c not in (results.get("citations") or [])])
+            results.setdefault("provenance", {}).update(gen.get("provenance") or {})
+            results.setdefault("debug", {}).setdefault("steps", []).extend(gen.get("debug", {}).get("steps", []))
         results.setdefault("plannedContracts", {})
         if isinstance(fields, list) and fields:
             # Include per-field mapping for caller
