@@ -1,9 +1,9 @@
 {
   "graphs": {
-    "enricher": "app:graph"
+    "enricher": "./app.py:graph"
   },
   "assistants": {
-    "enricher": { "graph": "app:graph" }
+    "enricher": { "graph": "./app.py:graph" }
   },
   "dependencies": [
     "langgraph",
