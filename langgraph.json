@@ -14,6 +14,7 @@
     "langchain-openai",
     "langchain-tavily",
     "python-dotenv",
-    "requests"
+    "requests",
+    "."
   ]
 }
