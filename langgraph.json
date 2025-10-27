@@ -1,14 +1,19 @@
 {
   "graphs": {
-    "enricher": "driftwood-langgraph/app.py:graph"
+    "enricher": "./app.py:graph"
   },
   "assistants": {
-    "enricher": { "graph": "driftwood-langgraph/app.py:graph" }
+    "enricher": { "graph": "./app.py:graph" }
   },
   "dependencies": [
     "langgraph",
+    "langgraph-api",
+    "langgraph-runtime-inmem",
     "langchain",
+    "langchain-core",
     "langchain-openai",
-    "langchain-tavily"
+    "langchain-tavily",
+    "python-dotenv",
+    "requests"
   ]
 }
