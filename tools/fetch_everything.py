@@ -10,6 +10,7 @@ import re
 from urllib.parse import urlsplit
 import time
 import uuid
+import logging
 
 
 def _backend_base() -> Optional[str]:
@@ -26,6 +27,7 @@ class FetchEverythingArgs(BaseModel):
     # Bundle mode: the agent plans fields it intends to change; we infer contracts and fetch once
     fields: Optional[List[str]] = Field(default=None, description="List of fieldIds to fill; enables bundle mode and contract inference")
     contracts: Optional[List[str]] = Field(default=None, description="Explicit list of contracts to fetch in bundle mode; deduped with inferred contracts")
+    formContext: Optional[Dict[str, Any]] = Field(default=None, description="Current form field values for contract context")
 
 
 _SCHEMA_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -440,13 +442,19 @@ async def _fetch_media_mode(
     urls: Optional[List[str]] = None,
     field_id: Optional[str] = None,
     max_images: int = 4,
+    media_kind: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Simplified media fetching for content form enricher."""
+    logger = logging.getLogger(__name__)
     debug_steps: List[Dict[str, Any]] = []
     log_lines: List[str] = []
     start_ts = time.time()
     base = _backend_base()
     if not base:
+        try:
+            logger.warning("FE.media: BACKEND_BASE_URL not set; skipping media fetch")
+        except Exception:
+            pass
         return {"ok": False, "error": {"code": "config", "message": "BACKEND_BASE_URL not set"}, "debug": {"steps": debug_steps}, "log": ["missing BACKEND_BASE_URL"]}
 
     tried: List[str] = []
@@ -466,13 +474,20 @@ async def _fetch_media_mode(
             try:
                 t0 = time.time()
                 req_id = uuid.uuid4().hex
+                try:
+                    logger.info("FE.media: POST fetch-media url=%s fieldId=%s base=%s req=%s", src, field_id, base, req_id[:8])
+                except Exception:
+                    pass
+                payload = {
+                    "url": src,
+                    "fieldId": field_id,
+                }
+                if isinstance(media_kind, str) and media_kind.strip():
+                    payload["mediaKind"] = media_kind.strip()
                 resp = await client.post(
                     f"{base}/api/v1/ai/enrichment/fetch-media",
                     headers={"Content-Type": "application/json", "X-Request-Id": req_id},
-                    json={
-                        "url": src,
-                        "fieldId": field_id,
-                    },
+                    json=payload,
                 )
                 debug_steps.append({"event": "fetch_media_http", "status": resp.status_code, "ts": time.time(), "elapsed_ms": int((time.time()-t0)*1000), "url": src})
                 if resp.status_code < 400:
@@ -494,6 +509,10 @@ async def _fetch_media_mode(
                             attachments = data.get("data")
                         if attachments:
                             log_lines.append("media: attachments returned")
+                            try:
+                                logger.info("FE.media: ok attachments=%d req=%s", len(attachments if isinstance(attachments, list) else [attachments]), req_id[:8])
+                            except Exception:
+                                pass
                             return {
                                 "ok": True,
                                 "fieldId": field_id,
@@ -516,6 +535,10 @@ async def _fetch_media_mode(
                         body_preview = (text[:800] + ("…" if len(text) > 800 else "")) if isinstance(text, str) else None
                 except Exception:
                     body_preview = None
+                try:
+                    logger.warning("FE.media: HTTP_%d body=%s req=%s", resp.status_code, (str(body_preview)[:200] if body_preview is not None else None), req_id[:8])
+                except Exception:
+                    pass
                 backend_errors.append({
                     "code": "backend_error",
                     "message": f"HTTP {resp.status_code} from fetch-media",
@@ -526,6 +549,10 @@ async def _fetch_media_mode(
                 })
             except Exception as e:
                 debug_steps.append({"event": "fetch_media_exc", "error": str(e), "ts": time.time(), "url": src})
+                try:
+                    logger.exception("FE.media: exception url=%s", src)
+                except Exception:
+                    pass
                 continue
 
     return {
@@ -637,7 +664,7 @@ async def _fetch_markdown_mode(
 
 
 @tool("fetch_everything", args_schema=FetchEverythingArgs)
-async def fetch_everything(url: Optional[str] = None, urls: Optional[List[str]] = None, fieldId: Optional[str] = None, contentType: Optional[str] = None, targetContract: Optional[str] = None, fields: Optional[List[str]] = None, contracts: Optional[List[str]] = None) -> Dict[str, Any]:
+async def fetch_everything(url: Optional[str] = None, urls: Optional[List[str]] = None, fieldId: Optional[str] = None, contentType: Optional[str] = None, targetContract: Optional[str] = None, fields: Optional[List[str]] = None, contracts: Optional[List[str]] = None, formContext: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Simplified fetch entrypoint for content form enricher.
 
     media: stage media attachments for media fields
@@ -645,10 +672,15 @@ async def fetch_everything(url: Optional[str] = None, urls: Optional[List[str]] 
     general: return page content (markdown/text) and citations for reasoning
     """
     # Require contentType when fieldId is provided
+    logger = logging.getLogger(__name__)
     debug_steps: List[Dict[str, Any]] = []
     log_lines: List[str] = []
     t_start = time.time()
     debug_steps.append({"event": "entry", "hasUrl": bool(url), "numUrls": len(urls or []), "fieldId": fieldId, "contentType": contentType, "ts": time.time()})
+    try:
+        logger.info("FE.entry: hasUrl=%s numUrls=%d fieldId=%s contentType=%s fields=%s contracts=%s", bool(url), len(urls or []), fieldId, contentType, fields, contracts)
+    except Exception:
+        pass
     if isinstance(fieldId, str) and fieldId.strip() and not (isinstance(contentType, str) and contentType.strip()):
         return {"ok": False, "error": {"code": "validation", "message": "contentType is required when fieldId is provided"}, "debug": {"steps": debug_steps}, "log": log_lines}
 
@@ -663,6 +695,10 @@ async def fetch_everything(url: Optional[str] = None, urls: Optional[List[str]] 
         eff_subtype = _infer_subtype_from_fields(fields)
     if isinstance(eff_subtype, str) and eff_subtype.strip():
         schema_doc = await _load_form_schema(eff_subtype.strip())
+        try:
+            logger.info("FE.schema: subtype=%s loaded=%s", eff_subtype.strip(), bool(schema_doc))
+        except Exception:
+            pass
     # Bundle mode: plan per field and union contracts
     if isinstance(fields, list) and fields:
         planned_by_field, inferred_contracts = _infer_contracts_for_fields(schema_doc, [f for f in fields if isinstance(f, str) and f.strip()], url, contentType)
@@ -673,16 +709,29 @@ async def fetch_everything(url: Optional[str] = None, urls: Optional[List[str]] 
             if c and c not in union_contracts:
                 union_contracts.append(c)
         debug_steps.append({"event": "planned_contracts", "byField": planned_by_field, "contracts": union_contracts, "ts": time.time()})
+        try:
+            logger.info("FE.bundle.plan: byField=%s contracts=%s", planned_by_field, union_contracts)
+        except Exception:
+            pass
         # Execute bundle via contract registry (preserves output shape)
         results: Dict[str, Any] = {"ok": True, "citations": [url] if isinstance(url, str) else [], "provenance": {"urlsTried": [url] if isinstance(url, str) else []}, "debug": {"steps": []}}
         try:
             from .contracts import resolve as _resolve_contracts  # type: ignore
-            from .contracts import __init__ as _bootstrap_contracts  # noqa: F401
+            # Ensure registry is bootstrapped via package import side-effects
+            try:
+                import tools.contracts as _contracts_pkg  # type: ignore  # noqa: F401
+                logger.info("FE.bundle: contracts package imported for bootstrap")
+            except Exception:
+                logger.info("FE.bundle: contracts package import failed; relying on prior import side-effects")
             contracts_impl = _resolve_contracts(union_contracts + ["generic"])  # always include generic
+            try:
+                logger.info("FE.bundle.resolve: requested=%s resolved=%s", union_contracts + ["generic"], [getattr(c, 'name', '?') for c in contracts_impl])
+            except Exception:
+                pass
             # fieldId for collection preference: first requested field if missing
             fid = (fieldId or (fields[0] if fields else None))
             for c in contracts_impl:
-                part = await c.collect(url=url, urls=urls, field_id=fid)
+                part = await c.collect(url=url, urls=urls, field_id=fid, form_values=formContext, schema_doc=schema_doc)
                 # Shallow merge per contract
                 for k, v in (part or {}).items():
                     if k == "debug":
@@ -695,6 +744,10 @@ async def fetch_everything(url: Optional[str] = None, urls: Optional[List[str]] 
                         results[k] = v
         except Exception:
             # Fall back to legacy general-only behavior on any error
+            try:
+                logger.exception("FE.bundle: contracts execution failed; falling back to general")
+            except Exception:
+                pass
             gen = await _fetch_general_mode(url=url, urls=urls)
             for k in ("title","description","metadata","thumbnail"):
                 if k in gen:
@@ -709,6 +762,10 @@ async def fetch_everything(url: Optional[str] = None, urls: Optional[List[str]] 
         # Merge timing/logs
         results.setdefault("log", []).extend(["bundle: completed"])
         results.setdefault("timings", {})["totalMsAll"] = int((time.time()-t_start)*1000)
+        try:
+            logger.info("FE.bundle: completed keys=%s", list(results.keys())[:10])
+        except Exception:
+            pass
         return results
     # 1) explicit override
     if isinstance(targetContract, str) and targetContract.strip():
@@ -734,6 +791,10 @@ async def fetch_everything(url: Optional[str] = None, urls: Optional[List[str]] 
         planned_contract = "generic"
 
     debug_steps.append({"event": "planned_contract", "contract": planned_contract, "ts": time.time()})
+    try:
+        logger.info("FE.single.plan: contract=%s", planned_contract)
+    except Exception:
+        pass
 
     # Contract execution mapping (temporary: reuse existing paths)
     # media → _fetch_media_mode; article → _fetch_markdown_mode; generic → _fetch_general_mode
@@ -746,11 +807,27 @@ async def fetch_everything(url: Optional[str] = None, urls: Optional[List[str]] 
         "thread": "general",
     }.get(planned_contract or "generic", "general")
     debug_steps.append({"event": "planned_mode", "mode": eff_mode, "ts": time.time()})
+    try:
+        logger.info("FE.single.mode: %s", eff_mode)
+    except Exception:
+        pass
     if eff_mode == "media":
+        mk_single = None
+        try:
+            lowf = str(fieldId or "").strip().lower()
+            if "audio" in lowf:
+                mk_single = "audio"
+            elif "video" in lowf:
+                mk_single = "video"
+            elif "image" in lowf or "cover" in lowf:
+                mk_single = "image"
+        except Exception:
+            mk_single = None
         res = await _fetch_media_mode(
             url=url,
             urls=urls,
             field_id=fieldId,
+            media_kind=mk_single,
         )
         res.setdefault("debug", {}).setdefault("steps", []).extend(debug_steps)
         res.setdefault("log", []).extend(log_lines)

@@ -11,9 +11,22 @@ from .base import Contract
 class MediaContract(Contract):
     name = "media"
 
-    async def collect(self, *, url: Optional[str], urls: Optional[List[str]], field_id: Optional[str]) -> Dict[str, Any]:
+    async def collect(self, *, url: Optional[str], urls: Optional[List[str]], field_id: Optional[str], form_values: Optional[Dict[str, Any]] = None, schema_doc: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         start = time.time()
-        mm = await _fetch_media_mode(url=url, urls=urls, field_id=field_id)
+        # Derive media kind from field name when possible
+        mk: Optional[str] = None
+        try:
+            fid = (field_id or "").strip().lower()
+            if fid:
+                if "audio" in fid:
+                    mk = "audio"
+                elif "video" in fid:
+                    mk = "video"
+                elif "image" in fid or "cover" in fid:
+                    mk = "image"
+        except Exception:
+            mk = None
+        mm = await _fetch_media_mode(url=url, urls=urls, field_id=field_id, media_kind=mk)
         out: Dict[str, Any] = {"debug": {"steps": []}}
         if mm.get("ok"):
             out["media"] = mm.get("attachments") or []

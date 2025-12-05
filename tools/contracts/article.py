@@ -11,7 +11,7 @@ from .base import Contract
 class ArticleContract(Contract):
     name = "article"
 
-    async def collect(self, *, url: Optional[str], urls: Optional[List[str]], field_id: Optional[str]) -> Dict[str, Any]:
+    async def collect(self, *, url: Optional[str], urls: Optional[List[str]], field_id: Optional[str], form_values: Optional[Dict[str, Any]] = None, schema_doc: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         start = time.time()
         md = await _fetch_markdown_mode(url=url, urls=urls, field_id=field_id)
         out: Dict[str, Any] = {"debug": {"steps": []}}

@@ -19,6 +19,8 @@ class Contract(Protocol):
         url: Optional[str],
         urls: Optional[List[str]],
         field_id: Optional[str],
+        form_values: Optional[Dict[str, Any]] = None,
+        schema_doc: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         raise NotImplementedError
 

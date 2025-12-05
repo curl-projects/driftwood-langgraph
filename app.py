@@ -14,7 +14,7 @@ import json
 import requests
 
 # Import tools from package
-from tools import tavily_search_tool, propose_field_edits, get_form_schema, fetch_everything, generate_image
+from tools import tavily_search_tool, propose_field_edits, get_form_schema, planned_fetch_everything, generate_image
 from prompts.enricher.system import get_system_prompt as get_enricher_prompt
 
 
@@ -54,7 +54,7 @@ if os.getenv("LANGSMITH_API_KEY"):
 # Default enricher model and tools
 _enricher_default_model = "gpt-4o"
 llm = ChatOpenAI(model=_enricher_default_model, streaming=True, **({"api_key": openai_key} if openai_key else {}))
-llm_with_tools = llm.bind_tools([tavily_search_tool, propose_field_edits, get_form_schema, fetch_everything])
+llm_with_tools = llm.bind_tools([tavily_search_tool, propose_field_edits, get_form_schema, planned_fetch_everything, generate_image])
 
 # --- Tool registry diagnostics (startup) ---
 try:
@@ -68,7 +68,7 @@ try:
                 return {"error": "no_schema"}
 
     tools_info = []
-    for t in [tavily_search_tool, propose_field_edits, get_form_schema, fetch_everything, generate_image]:
+    for t in [tavily_search_tool, propose_field_edits, get_form_schema, planned_fetch_everything, generate_image]:
         schema = _schema_for(t)
         tools_info.append({
             "name": getattr(t, "name", None) or "unknown",
@@ -103,13 +103,20 @@ def build_enricher_graph():
     _enricher_default_model = "gpt-4o"
     
     def _bind_enricher_tools(llm_inst: ChatOpenAI):
-        return llm_inst.bind_tools([
+        bound = llm_inst.bind_tools([
             tavily_search_tool,
             propose_field_edits,
             get_form_schema,
-            fetch_everything,
+            planned_fetch_everything,
             generate_image,
         ])
+        try:
+            logger.info("enricher.tools_bound: %s", [
+                getattr(x, "name", None) or "unknown" for x in [tavily_search_tool, propose_field_edits, get_form_schema, planned_fetch_everything, generate_image]
+            ])
+        except Exception:
+            pass
+        return bound
 
     eg = StateGraph(MessagesState)
 
@@ -121,7 +128,12 @@ def build_enricher_graph():
             pass
         
         # Always prepend the enricher system prompt
-        msgs = [SystemMessage(content=get_enricher_prompt())] + msgs
+        sys_prompt = get_enricher_prompt()
+        try:
+            logger.info("enricher:system_prompt: len=%d head=%s", len(sys_prompt or ""), (sys_prompt or "")[:160].replace("\n"," "))
+        except Exception:
+            pass
+        msgs = [SystemMessage(content=sys_prompt)] + msgs
         
         # Per-run model override
         override = _extract_llm_model(msgs) or _enricher_default_model
@@ -136,9 +148,22 @@ def build_enricher_graph():
         return {"messages": [res]}
 
     eg.add_node("model", model_node)
-    eg.add_node("tools", ToolNode([tavily_search_tool, propose_field_edits, get_form_schema, fetch_everything, generate_image]))
+    eg.add_node("tools", ToolNode([tavily_search_tool, propose_field_edits, get_form_schema, planned_fetch_everything, generate_image]))
     eg.add_edge("tools", "model")
-    eg.add_conditional_edges("model", tools_condition, {"tools": "tools", END: END})
+    # Log routing decision from tools_condition
+    def _logged_tools_condition(state: MessagesState):
+        try:
+            last = (state.get("messages") or [])[-1] if (state.get("messages") or []) else None
+            has_tc = bool(getattr(last, "tool_calls", None))
+        except Exception:
+            has_tc = False
+        res = tools_condition(state)
+        try:
+            logger.info("enricher:route_decision: has_tool_calls=%s -> %s", has_tc, res)
+        except Exception:
+            pass
+        return res
+    eg.add_conditional_edges("model", _logged_tools_condition, {"tools": "tools", END: END})
     eg.set_entry_point("model")
     return eg.compile()
 

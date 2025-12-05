@@ -11,7 +11,7 @@ from .base import Contract
 class GenericContract(Contract):
     name = "generic"
 
-    async def collect(self, *, url: Optional[str], urls: Optional[List[str]], field_id: Optional[str]) -> Dict[str, Any]:
+    async def collect(self, *, url: Optional[str], urls: Optional[List[str]], field_id: Optional[str], form_values: Optional[Dict[str, Any]] = None, schema_doc: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         start = time.time()
         gen = await _fetch_general_mode(url=url, urls=urls)
         out: Dict[str, Any] = {"debug": {"steps": []}}
