@@ -1,9 +1,11 @@
 {
   "graphs": {
-    "enricher": "./app.py:graph"
+    "enricher": "./app.py:graph",
+    "enricher_no_image": "./app.py:graph_no_image"
   },
   "assistants": {
-    "enricher": { "graph": "./app.py:graph" }
+    "enricher": { "graph": "./app.py:graph" },
+    "enricher_no_image": { "graph": "./app.py:graph_no_image" }
   },
   "dependencies": [
     "langgraph",

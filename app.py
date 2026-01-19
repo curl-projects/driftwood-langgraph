@@ -54,7 +54,15 @@ if os.getenv("LANGSMITH_API_KEY"):
 # Default enricher model and tools
 _enricher_default_model = "gpt-4o"
 llm = ChatOpenAI(model=_enricher_default_model, streaming=True, **({"api_key": openai_key} if openai_key else {}))
-llm_with_tools = llm.bind_tools([tavily_search_tool, propose_field_edits, get_form_schema, planned_fetch_everything, generate_image])
+
+def _enricher_tools(*, include_generate_image: bool) -> list:
+    tools = [tavily_search_tool, propose_field_edits, get_form_schema, planned_fetch_everything]
+    if include_generate_image:
+        tools.append(generate_image)
+    return tools
+
+# Default: full toolset (includes generate_image).
+llm_with_tools = llm.bind_tools(_enricher_tools(include_generate_image=True))
 
 # --- Tool registry diagnostics (startup) ---
 try:
@@ -68,7 +76,7 @@ try:
                 return {"error": "no_schema"}
 
     tools_info = []
-    for t in [tavily_search_tool, propose_field_edits, get_form_schema, planned_fetch_everything, generate_image]:
+    for t in _enricher_tools(include_generate_image=True):
         schema = _schema_for(t)
         tools_info.append({
             "name": getattr(t, "name", None) or "unknown",
@@ -99,20 +107,15 @@ def _extract_llm_model(all_msgs: List[Any]) -> Optional[str]:
 
 
 # ---- Content Form Enricher graph ----
-def build_enricher_graph():
+def build_enricher_graph(*, include_generate_image: bool):
     _enricher_default_model = "gpt-4o"
     
     def _bind_enricher_tools(llm_inst: ChatOpenAI):
-        bound = llm_inst.bind_tools([
-            tavily_search_tool,
-            propose_field_edits,
-            get_form_schema,
-            planned_fetch_everything,
-            generate_image,
-        ])
+        tools = _enricher_tools(include_generate_image=include_generate_image)
+        bound = llm_inst.bind_tools(tools)
         try:
             logger.info("enricher.tools_bound: %s", [
-                getattr(x, "name", None) or "unknown" for x in [tavily_search_tool, propose_field_edits, get_form_schema, planned_fetch_everything, generate_image]
+                getattr(x, "name", None) or "unknown" for x in tools
             ])
         except Exception:
             pass
@@ -148,7 +151,7 @@ def build_enricher_graph():
         return {"messages": [res]}
 
     eg.add_node("model", model_node)
-    eg.add_node("tools", ToolNode([tavily_search_tool, propose_field_edits, get_form_schema, planned_fetch_everything, generate_image]))
+    eg.add_node("tools", ToolNode(_enricher_tools(include_generate_image=include_generate_image)))
     eg.add_edge("tools", "model")
     # Log routing decision from tools_condition
     def _logged_tools_condition(state: MessagesState):
@@ -168,7 +171,9 @@ def build_enricher_graph():
     return eg.compile()
 
 
-enricher_graph = build_enricher_graph()
+enricher_graph = build_enricher_graph(include_generate_image=True)
+enricher_no_image_graph = build_enricher_graph(include_generate_image=False)
 
 # Export the enricher graph as the main graph for content form usage
 graph = enricher_graph
+graph_no_image = enricher_no_image_graph
